@@ -1,0 +1,38 @@
+# ============================================================
+# SGD System — Configuration de Simulation
+# Ir divinkas — SYNAPTIC Lab
+# ============================================================
+
+signal:
+  fs: 100000                          # Fréquence d'échantillonnage (Hz)
+  duration: 0.01                      # Durée du signal (s)
+  frequencies: [1000, 3000, 5000]     # Fréquences des tons (Hz)
+  amplitudes: [1.0, 0.8, 0.6]        # Amplitudes linéaires
+  phases: null                        # Phases initiales (rad), null = aléatoire uniforme [0, 2π)
+
+doppler:
+  fd: 500                             # Décalage Doppler (Hz)
+  dynamic: false                      # Doppler variable dans le temps (futur)
+
+channel:
+  snr_db: 20                          # SNR cible (dB)
+  multipath:
+    enabled: false
+    paths:
+      - gain: 0.5
+        delay_s: 0.000001             # Retard en secondes
+      - gain: 0.3
+        delay_s: 0.000003
+
+array:
+  n_elements: 8                       # Nombre d'antennes ULA
+  d_lambda: 0.5                       # Espacement inter-antennes (fraction de λ)
+  aoa_deg: 30                         # Angle d'arrivée (degrés)
+
+montecarlo:
+  n_runs: 1000
+  snr_range: [-10, -5, 0, 5, 10, 15, 20, 25, 30]
+
+output:
+  save_dir: "./results"
+  format: "npz"                       # npz ou csv

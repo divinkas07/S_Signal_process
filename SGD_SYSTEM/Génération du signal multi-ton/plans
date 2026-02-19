@@ -1,0 +1,274 @@
+🎯 Validation du Modèle de Signal
+Objectif Fondamental (Avant Toute Simulation Massive)
+
+La validation du modèle de signal est l’étape la plus critique du pipeline.
+Elle garantit que tout ce que tu testes ensuite (MUSIC, ICA, IMM, CRLB) repose sur une représentation physiquement correcte.
+
+🎯 OBJECTIF PRINCIPAL
+
+S’assurer que le modèle mathématique du signal :
+
+Représente fidèlement la réalité physique
+
+Intègre toutes les perturbations dominantes
+
+Respecte les lois statistiques attendues
+
+Permet une estimation non biaisée des paramètres
+
+🧠 OBJECTIFS DÉTAILLÉS
+1️⃣ Fidélité Physique
+
+Le modèle doit reproduire :
+
+Décalage Doppler réaliste (orbite LEO)
+
+Multi-ton cohérent
+
+Phase continue
+
+Relation correcte amplitude/bruit
+
+Critère
+
+Le spectre simulé doit être indiscernable d’une capture réelle (à résolution équivalente).
+
+2️⃣ Cohérence Statistique
+
+Le bruit doit respecter :
+
+Distribution gaussienne
+
+Moyenne ≈ 0
+
+Variance contrôlée
+
+PSD plate (AWGN)
+
+Critère
+
+Histogramme du bruit ≈ loi normale
+Test de normalité validé (Shapiro ou équivalent)
+
+3️⃣ Contrôlabilité Paramétrique
+
+Chaque paramètre doit être indépendant :
+
+SNR réglable précisément
+
+Doppler réglable en Hz exact
+
+Angle AOA réglable en degré exact
+
+Multipath activable/désactivable
+
+Critère
+
+Erreur entre valeur injectée et valeur mesurée < 1%
+
+4️⃣ Stabilité Numérique
+
+Le modèle ne doit pas :
+
+diverger pour SNR bas
+
+générer overflow
+
+produire NaN
+
+créer corrélation artificielle
+
+Critère
+
+1000 runs sans instabilité
+
+5️⃣ Compatibilité Théorique
+
+Le modèle doit permettre :
+
+Calcul exact de la CRLB
+
+Estimation non biaisée
+
+Vérification RMSE ≥ CRLB
+
+📡 Formulation Mathématique Minimale
+
+Signal simulé :
+
+𝑠
+(
+𝑡
+)
+=
+∑
+𝑘
+=
+1
+𝐾
+𝐴
+𝑘
+𝑒
+𝑗
+(
+2
+𝜋
+(
+𝑓
+𝑘
++
+𝑓
+𝑑
+)
+𝑡
++
+𝜙
+𝑘
+)
+s(t)=
+k=1
+∑
+K
+	​
+
+A
+k
+	​
+
+e
+j(2π(f
+k
+	​
+
++f
+d
+	​
+
+)t+ϕ
+k
+	​
+
+)
+
+Canal :
+
+𝑟
+(
+𝑡
+)
+=
+∑
+𝑖
+=
+1
+𝑃
+𝛼
+𝑖
+𝑠
+(
+𝑡
+−
+𝜏
+𝑖
+)
++
+𝑛
+(
+𝑡
+)
+r(t)=
+i=1
+∑
+P
+	​
+
+α
+i
+	​
+
+s(t−τ
+i
+	​
+
+)+n(t)
+
+où :
+
+𝑓
+𝑑
+f
+d
+	​
+
+ = Doppler
+
+𝛼
+𝑖
+α
+i
+	​
+
+ = gain multipath
+
+𝜏
+𝑖
+τ
+i
+	​
+
+ = retard
+
+𝑛
+(
+𝑡
+)
+∼
+𝑁
+(
+0
+,
+𝜎
+2
+)
+n(t)∼N(0,σ
+2
+)
+
+📊 Indicateurs de Validation
+Test	KPI	Seuil
+Spectral accuracy	Δf mesuré	< 1%
+SNR accuracy	ΔSNR	< 0.5 dB
+Doppler accuracy	Δf_d	< 1%
+Gaussianity	p-value	> 0.05
+Numerical stability	crash rate	0%
+🚦 Critère GO Phase Monte Carlo
+
+Tu peux lancer la simulation massive uniquement si :
+
+Spectre correct
+
+SNR exact
+
+Doppler exact
+
+Pas d’instabilité
+
+RMSE ≥ CRLB
+
+⚠️ Erreur Classique à Éviter
+
+Utiliser un bruit mal normalisé
+
+Oublier la cohérence de phase entre antennes
+
+Simuler un Doppler constant alors qu’il est dynamique
+
+Injecter un multipath irréaliste
+
+🏁 Résumé Stratégique
+
+La validation du modèle de signal sert à :
+
+🔹 Garantir que ton simulateur est un jumeau numérique fiable
+🔹 Éviter de valider un algorithme sur une physique fausse
+🔹 Éliminer les biais invisibles avant intégration matérielle

@@ -1,0 +1,232 @@
+"""
+Ir divinkas — SYNAPTIC Lab
+SGD System — Modèle de Signal Multi-Ton
+
+Génère un signal multi-ton complexe avec décalage Doppler et
+support antenne ULA (Uniform Linear Array).
+
+Formulation :
+    s(t) = Σ_k  A_k · exp(j·(2π·(f_k + f_d)·t + φ_k))
+
+Signal reçu sur ULA :
+    x(t) = a(θ) ⊗ s(t)
+    a_n(θ) = exp(j·2π·d·n·sin(θ))   pour n = 0, ..., N-1
+"""
+
+import numpy as np
+import yaml
+from pathlib import Path
+
+# ──────────────────────────────────────────────
+# Chargement de la configuration
+# ──────────────────────────────────────────────
+
+def load_config(config_path: str = None) -> dict:
+    """Charge le fichier config.yaml et retourne un dict."""
+    if config_path is None:
+        config_path = Path(__file__).parent / "config.yaml"
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+# ──────────────────────────────────────────────
+# Génération du vecteur temps
+# ──────────────────────────────────────────────
+
+def generate_time_vector(fs: float, duration: float) -> np.ndarray:
+    """Retourne un vecteur temps échantillonné à fs Hz sur `duration` secondes."""
+    N = int(fs * duration)
+    return np.arange(N) / fs
+
+
+# ──────────────────────────────────────────────
+# Signal multi-ton avec Doppler
+# ──────────────────────────────────────────────
+
+def generate_multitone(
+    t: np.ndarray,
+    frequencies: list[float],
+    amplitudes: list[float],
+    phases: list[float] | None = None,
+    fd: float = 0.0,
+) -> np.ndarray:
+    """
+    Génère un signal multi-ton complexe.
+
+    Parameters
+    ----------
+    t : np.ndarray
+        Vecteur temps (s).
+    frequencies : list[float]
+        Fréquences des K tons (Hz).
+    amplitudes : list[float]
+        Amplitudes linéaires des K tons.
+    phases : list[float] or None
+        Phases initiales (rad). Si None → phases aléatoires uniformes [0, 2π).
+    fd : float
+        Décalage Doppler commun (Hz).
+
+    Returns
+    -------
+    s : np.ndarray, shape (N,)
+        Signal multi-ton complexe.
+    """
+    K = len(frequencies)
+    assert len(amplitudes) == K, "Nombre d'amplitudes ≠ nombre de fréquences"
+
+    if phases is None:
+        phases = np.random.uniform(0, 2 * np.pi, size=K)
+    else:
+        phases = np.asarray(phases, dtype=float)
+        assert len(phases) == K, "Nombre de phases ≠ nombre de fréquences"
+
+    s = np.zeros(len(t), dtype=complex)
+    for k in range(K):
+        f_shifted = frequencies[k] + fd
+        s += amplitudes[k] * np.exp(1j * (2 * np.pi * f_shifted * t + phases[k]))
+
+    return s
+
+
+# ──────────────────────────────────────────────
+# Steering vector ULA
+# ──────────────────────────────────────────────
+
+def steering_vector(n_elements: int, d_lambda: float, aoa_deg: float) -> np.ndarray:
+    """
+    Calcule le steering vector d'un ULA.
+
+    Parameters
+    ----------
+    n_elements : int
+        Nombre d'antennes.
+    d_lambda : float
+        Espacement inter-antennes en fraction de λ.
+    aoa_deg : float
+        Angle d'arrivée (degrés).
+
+    Returns
+    -------
+    a : np.ndarray, shape (n_elements, 1)
+        Steering vector colonne.
+    """
+    aoa_rad = np.deg2rad(aoa_deg)
+    n = np.arange(n_elements)
+    a = np.exp(1j * 2 * np.pi * d_lambda * n * np.sin(aoa_rad))
+    return a.reshape(-1, 1)
+
+
+# ──────────────────────────────────────────────
+# Signal reçu sur le réseau d'antennes
+# ──────────────────────────────────────────────
+
+def generate_array_signal(
+    s: np.ndarray,
+    n_elements: int,
+    d_lambda: float,
+    aoa_deg: float,
+) -> np.ndarray:
+    """
+    Projette le signal sur un ULA via le steering vector.
+
+    Parameters
+    ----------
+    s : np.ndarray, shape (N,)
+        Signal temporel mono-canal.
+    n_elements : int
+        Nombre d'antennes.
+    d_lambda : float
+        Espacement inter-antennes (fraction de λ).
+    aoa_deg : float
+        Angle d'arrivée (degrés).
+
+    Returns
+    -------
+    X : np.ndarray, shape (n_elements, N)
+        Signal reçu sur chaque antenne.
+    """
+    a = steering_vector(n_elements, d_lambda, aoa_deg)
+    s_row = s.reshape(1, -1)
+    return a @ s_row
+
+
+# ──────────────────────────────────────────────
+# Wrapper haut niveau depuis config
+# ──────────────────────────────────────────────
+
+def generate_signal_from_config(config: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Génère le signal complet à partir de la configuration.
+
+    Returns
+    -------
+    t : np.ndarray — vecteur temps
+    s : np.ndarray — signal mono-canal (N,)
+    X : np.ndarray — signal sur ULA (n_elements, N)
+    """
+    sig = config["signal"]
+    dop = config["doppler"]
+    arr = config["array"]
+
+    t = generate_time_vector(sig["fs"], sig["duration"])
+
+    phases = sig.get("phases", None)
+
+    s = generate_multitone(
+        t=t,
+        frequencies=sig["frequencies"],
+        amplitudes=sig["amplitudes"],
+        phases=phases,
+        fd=dop["fd"],
+    )
+
+    X = generate_array_signal(
+        s=s,
+        n_elements=arr["n_elements"],
+        d_lambda=arr["d_lambda"],
+        aoa_deg=arr["aoa_deg"],
+    )
+
+    return t, s, X
+
+
+# ──────────────────────────────────────────────
+# Point d'entrée pour test rapide
+# ──────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+
+    cfg = load_config()
+    t, s, X = generate_signal_from_config(cfg)
+
+    print(f"Signal shape  : {s.shape}")
+    print(f"Array shape   : {X.shape}")
+    print(f"Duration      : {t[-1]:.4f} s")
+    print(f"Samples       : {len(t)}")
+
+    # Spectre du signal mono-canal
+    N = len(s)
+    freqs = np.fft.fftfreq(N, d=1 / cfg["signal"]["fs"])
+    S = np.fft.fft(s) / N
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 8))
+
+    # Amplitude temporelle
+    axes[0].plot(t * 1000, np.real(s), linewidth=0.5)
+    axes[0].set_xlabel("Temps (ms)")
+    axes[0].set_ylabel("Amplitude (Re)")
+    axes[0].set_title("Signal multi-ton — domaine temporel")
+    axes[0].grid(True, alpha=0.3)
+
+    # Spectre
+    axes[1].stem(freqs[:N // 2], np.abs(S[:N // 2]) * 2, markerfmt=".", basefmt=" ")
+    axes[1].set_xlabel("Fréquence (Hz)")
+    axes[1].set_ylabel("|S(f)|")
+    axes[1].set_title("Spectre du signal multi-ton")
+    axes[1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig("signal_preview.png", dpi=150)
+    plt.show()
+    print("✅ Signal généré avec succès")
