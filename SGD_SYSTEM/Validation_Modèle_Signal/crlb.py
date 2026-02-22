@@ -49,10 +49,9 @@ def crlb_frequency(
         sqrt(CRLB) en Hz — borne inférieure sur le RMSE fréquentiel.
     """
     snr_lin = 10 ** (snr_db / 10)
-    # Variance de la fréquence normalisée
-    # CRLB(f_norm) = 12 / (4π² · SNR · N · (N²-1))
-    # Conversion en Hz : f = f_norm · fs
-    crlb_var = (12 * fs**2) / (4 * np.pi**2 * amplitude**2 * N * (N**2 - 1) * snr_lin)
+    # Variance de la fréquence normalisée (Kay Vol 1, p. 433)
+    # CRLB(f_norm) = 6 / ((2π)² · SNR · N · (N²-1))
+    crlb_var = (6 * fs**2) / (4 * np.pi**2 * amplitude**2 * N * (N**2 - 1) * snr_lin)
     return np.sqrt(crlb_var)
 
 
@@ -100,6 +99,8 @@ def crlb_aoa(
     # Facteur de réseau
     beta_sq = (2 * np.pi * d_lambda) ** 2
 
+    # Formule AOA CRLB (Stoica & Moses): 6 / (SNR * L * beta^2 * cos^2(theta) * M(M^2-1))
+    # Note: On utilise ici 6 car SNR est défini sur le signal complexe total.
     crlb_var_rad = 6 / (beta_sq * np.cos(aoa_rad)**2 * M * (M**2 - 1) * snr_lin * n_snapshots)
     crlb_std_deg = np.rad2deg(np.sqrt(crlb_var_rad))
 

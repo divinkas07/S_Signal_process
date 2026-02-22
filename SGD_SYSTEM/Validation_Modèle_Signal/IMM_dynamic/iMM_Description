@@ -1,0 +1,249 @@
+Parfait. On passe à une brique **système critique** :
+
+# 🎯 Validation IMM (Interacting Multiple Model)
+
+---
+
+# 🎯 OBJECTIF
+
+Valider que l’IMM :
+
+1. Détecte automatiquement le bon mode dynamique
+2. Bascule rapidement lors d’un changement d’état
+3. Ne diverge pas numériquement
+4. Ne “saute” pas entre modèles (instabilité)
+
+---
+
+# 🧠 1️⃣ Principe IMM (Rappel rapide)
+
+L’IMM combine plusieurs filtres de Kalman, chacun représentant un modèle dynamique :
+
+* Modèle 1 → Statique (v ≈ 0)
+* Modèle 2 → Marche (1.4 m/s)
+* Modèle 3 → Course (3 m/s)
+* Modèle 4 → Mouvement erratique
+
+À chaque instant :
+
+1. Mélange des états
+2. Prédiction par chaque modèle
+3. Mise à jour par mesure
+4. Calcul vraisemblance
+5. Mise à jour des probabilités de modèles
+
+---
+
+# 📐 2️⃣ Modèles Dynamiques
+
+On travaille en 2D :
+
+État :
+
+[
+x = [x, y, v_x, v_y]^T
+]
+
+---
+
+## 🔹 Modèle 1 : Statique
+
+Transition :
+
+[
+F =
+\begin{bmatrix}
+1 & 0 & 0 & 0 \
+0 & 1 & 0 & 0 \
+0 & 0 & 0 & 0 \
+0 & 0 & 0 & 0
+\end{bmatrix}
+]
+
+---
+
+## 🔹 Modèle 2 : Marche
+
+Modèle vitesse constante :
+
+[
+F =
+\begin{bmatrix}
+1 & 0 & dt & 0 \
+0 & 1 & 0 & dt \
+0 & 0 & 1 & 0 \
+0 & 0 & 0 & 1
+\end{bmatrix}
+]
+
+Avec bruit faible.
+
+---
+
+## 🔹 Modèle 3 : Course
+
+Même F, mais bruit de processus plus élevé.
+
+---
+
+## 🔹 Modèle 4 : Erratique
+
+Bruitage élevé (Q fort).
+
+---
+
+# 🧮 3️⃣ Implémentation IMM simplifiée
+
+On utilise `filterpy`.
+
+---
+
+## 📜 Script minimal fonctionnel
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from filterpy.kalman import KalmanFilter
+from filterpy.kalman import IMMEstimator
+
+dt = 0.1
+steps = 200
+
+# ===============================
+# Génération trajectoire simulée
+# ===============================
+true_states = []
+x = np.array([0,0,0,0])
+
+for k in range(steps):
+    if k < 50:        # Statique
+        v = 0
+    elif k < 100:     # Marche
+        v = 1.4
+    elif k < 150:     # Course
+        v = 3
+    else:             # Erratique
+        v = np.random.randn()*2
+    
+    x = np.array([x[0] + v*dt, x[1], v, 0])
+    true_states.append(x)
+
+true_states = np.array(true_states)
+
+# ===============================
+# Mesures bruitées
+# ===============================
+measurements = true_states[:, :2] + np.random.randn(steps,2)*0.5
+
+# ===============================
+# Création filtres
+# ===============================
+def create_kf(q_scale):
+    kf = KalmanFilter(dim_x=4, dim_z=2)
+    kf.F = np.array([[1,0,dt,0],
+                     [0,1,0,dt],
+                     [0,0,1,0],
+                     [0,0,0,1]])
+    kf.H = np.array([[1,0,0,0],
+                     [0,1,0,0]])
+    kf.P *= 10
+    kf.R = np.eye(2)
+    kf.Q = np.eye(4) * q_scale
+    return kf
+
+kf_static = create_kf(0.0001)
+kf_walk = create_kf(0.01)
+kf_run = create_kf(0.1)
+kf_erratic = create_kf(1)
+
+filters = [kf_static, kf_walk, kf_run, kf_erratic]
+
+# Matrice transition modèles
+mu = [0.25]*4
+trans = np.array([
+    [0.90,0.03,0.03,0.04],
+    [0.03,0.90,0.03,0.04],
+    [0.03,0.03,0.90,0.04],
+    [0.03,0.03,0.03,0.91]
+])
+
+imm = IMMEstimator(filters, mu, trans)
+
+# ===============================
+# Boucle IMM
+# ===============================
+prob_history = []
+
+for z in measurements:
+    imm.predict()
+    imm.update(z)
+    prob_history.append(imm.mu.copy())
+
+prob_history = np.array(prob_history)
+
+# ===============================
+# Visualisation probabilités
+# ===============================
+plt.plot(prob_history)
+plt.legend(["Statique","Marche","Course","Erratique"])
+plt.xlabel("Temps")
+plt.ylabel("Probabilité modèle")
+plt.title("Évolution des probabilités IMM")
+plt.show()
+```
+
+---
+
+# 📊 4️⃣ KPI à mesurer automatiquement
+
+## 1️⃣ Temps de convergence
+
+Temps nécessaire pour que :
+
+[
+\mu_{correct} > 0.8
+]
+
+Cible : < 500 ms
+
+---
+
+## 2️⃣ Probabilité modèle correct
+
+[
+\frac{\text{temps où modèle correct dominant}}{\text{durée totale}}
+]
+
+Cible : > 90%
+
+---
+
+## 3️⃣ Oscillation
+
+Compter changements rapides modèle dominant.
+
+Cible : < 5 oscillations parasites.
+
+---
+
+# 🚦 Critère GO vers intégration
+
+Tu passes hardware si :
+
+* Convergence < 0.5 s
+* Probabilité correcte > 90%
+* Pas d’oscillation instable
+* Pas divergence numérique
+* Stable sur 1000 runs Monte Carlo
+
+---
+
+# ⚠️ Erreurs fréquentes
+
+* Q mal calibré → oscillations
+* R mal estimé → sur-confiance
+* Matrice transition mal définie
+* Trop peu d’observabilité
+
+---
+

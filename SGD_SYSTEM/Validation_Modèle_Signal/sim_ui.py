@@ -604,7 +604,7 @@ def build_menu(cfg: dict, config_path: Path) -> dict:
 def print_menu(registry: dict):
     """Affiche le menu principal stylisé."""
     console.print()
-    t = Table(box=box.SIMPLE_ROUNDED, show_header=False, padding=(0, 2))
+    t = Table(box=box.ROUNDED, show_header=False, padding=(0, 2))
     t.add_column("Touche", style="bold cyan",   width=6)
     t.add_column("Action",  style="white",       width=42)
 

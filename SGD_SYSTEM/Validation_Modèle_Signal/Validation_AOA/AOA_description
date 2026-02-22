@@ -1,0 +1,180 @@
+Parfait.
+On passe à une brique **physiquement plus exigeante** : **Validation AOA avec MUSIC**.
+
+---
+
+# 🎯 Objectif – Validation AOA (Angle of Arrival)
+
+## 🎯 But fondamental
+
+Vérifier que l’algorithme **MUSIC** estime correctement l’angle d’arrivée d’un signal RF, en simulation contrôlée, avant toute intégration matérielle.
+
+---
+
+# 🧠 1️⃣ Ce que tu dois démontrer
+
+Avant hardware, l’algorithme doit :
+
+* Estimer l’angle avec erreur < 2°
+* Rester stable jusqu’à SNR = 0 dB
+* Avoir une variance proche de la CRLB
+* Résister à une interférence faible
+
+---
+
+# 📐 2️⃣ Modèle Physique
+
+Pour un réseau 2 antennes espacées de ( d ) :
+
+[
+\Delta \phi = \frac{2\pi d}{\lambda} \sin(\theta)
+]
+
+où :
+
+* ( d = \lambda/2 )
+* ( \theta ) = angle d’arrivée
+* ( \lambda = c/f )
+
+---
+
+# 🧮 3️⃣ Implémentation MUSIC – Version Simulation Propre
+
+## Hypothèses
+
+* 2 antennes cohérentes
+* 1 source dominante
+* Bruit AWGN
+* Bande étroite
+
+---
+
+## 📜 Script complet
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from numpy.linalg import eig
+
+# ===============================
+# Paramètres physiques
+# ===============================
+c = 3e8
+f = 2.4e9          # fréquence porteuse (exemple)
+lam = c / f
+d = lam / 2        # espacement antennes
+
+theta_true = 30    # angle réel en degrés
+snr_db = 10
+N = 2000
+
+# ===============================
+# Génération signal source
+# ===============================
+t = np.arange(N)
+signal = np.exp(1j*2*np.pi*0.05*t)
+
+# Phase shift entre antennes
+theta_rad = np.deg2rad(theta_true)
+phase_shift = np.exp(1j * 2*np.pi*d*np.sin(theta_rad)/lam)
+
+# Signaux reçus
+x1 = signal
+x2 = signal * phase_shift
+
+X = np.vstack([x1, x2])
+
+# ===============================
+# Ajout bruit
+# ===============================
+signal_power = np.mean(np.abs(X)**2)
+noise_power = signal_power / (10**(snr_db/10))
+noise = np.sqrt(noise_power/2) * (np.random.randn(*X.shape) + 1j*np.random.randn(*X.shape))
+
+X_noisy = X + noise
+
+# ===============================
+# Matrice de covariance
+# ===============================
+R = (X_noisy @ X_noisy.conj().T) / N
+
+# ===============================
+# Décomposition propre
+# ===============================
+eigenvals, eigenvecs = eig(R)
+idx = eigenvals.argsort()[::-1]
+eigenvecs = eigenvecs[:, idx]
+
+# Sous-espace bruit
+En = eigenvecs[:, 1:]
+
+# ===============================
+# Spectre MUSIC
+# ===============================
+angles = np.linspace(-90, 90, 360)
+P_music = []
+
+for angle in angles:
+    theta = np.deg2rad(angle)
+    steering = np.array([
+        1,
+        np.exp(1j * 2*np.pi*d*np.sin(theta)/lam)
+    ]).reshape(-1,1)
+    
+    val = 1 / np.abs((steering.conj().T @ En @ En.conj().T @ steering))
+    P_music.append(val[0,0])
+
+P_music = np.array(P_music)
+theta_est = angles[np.argmax(P_music)]
+
+print("Angle réel :", theta_true)
+print("Angle estimé :", theta_est)
+
+# ===============================
+# Visualisation
+# ===============================
+plt.plot(angles, 10*np.log10(P_music/np.max(P_music)))
+plt.axvline(theta_true, color='r', linestyle='--', label='Angle réel')
+plt.axvline(theta_est, color='g', linestyle='--', label='Angle estimé')
+plt.xlabel("Angle (°)")
+plt.ylabel("Spectre MUSIC (dB)")
+plt.legend()
+plt.grid()
+plt.show()
+```
+
+---
+
+# 📊 4️⃣ KPI à mesurer
+
+Pour validation sérieuse :
+
+* Erreur absolue = |θ_est − θ_true|
+* RMSE sur 1000 runs
+* Variance vs CRLB
+* Taux d’échec (pic erroné)
+
+---
+
+# 🎯 Objectif chiffré
+
+| Paramètre      | Cible |
+| -------------- | ----- |
+| Erreur moyenne | < 2°  |
+| Stable à SNR   | 0 dB  |
+| RMSE / CRLB    | < 1.5 |
+| Échec          | < 5%  |
+
+---
+
+# ⚠️ Points critiques
+
+1. Trop peu d’échantillons → pic large
+2. Mauvais espacement antenne
+3. SNR trop faible
+4. Multipath non simulé
+5. Antennes non cohérentes (en hardware)
+
+---
+
+

@@ -1,0 +1,198 @@
+## Objectif
+
+Prouver que la séparation est robuste au brouillage.
+
+### Tests à faire :
+
+- 2 sources corrélées
+- 3 sources dont 1 dominante
+- Interférence impulsionnelle
+
+### KPI
+
+- SIR sortie > 10 dB minimum
+- Stabilité sur 1000 runs Monte Carlo
+- Pas d’explosion numérique
+
+
+Parfait. On attaque une brique critique : **Séparation de Sources (ICA)**.
+
+---
+
+# 🎯 Objectif – Séparation de Sources (ICA)
+
+## 🎯 But fondamental
+
+Isoler le signal satellite d’intérêt dans un mélange contenant :
+
+* bruit AWGN
+* interférences RF
+* éventuellement un signal corrélé
+* multipath faible
+
+Sans connaissance préalable des sources.
+
+---
+
+# 🧠 1️⃣ Ce que l’ICA doit démontrer en simulation
+
+Avant hardware, tu dois prouver :
+
+### ✔ Capacité de séparation
+
+Extraire correctement la composante satellite dominante.
+
+### ✔ Robustesse au brouillage
+
+Fonctionner même si l’interférence est à +3 dB.
+
+### ✔ Stabilité numérique
+
+Pas d’explosion matricielle / inversion instable.
+
+### ✔ Gain mesurable
+
+Amélioration SIR significative.
+
+---
+
+# 🧮 2️⃣ Modèle mathématique
+
+Modèle de mélange :
+
+[
+X = A S
+]
+
+* ( S ) = sources indépendantes
+* ( A ) = matrice de mélange inconnue
+* ( X ) = signaux observés (antennes)
+
+ICA estime :
+
+[
+\hat{S} = W X
+]
+
+avec ( W \approx A^{-1} )
+
+---
+
+# 📡 3️⃣ Conditions nécessaires (sinon ICA échoue)
+
+| Condition                | Obligatoire ? |
+| ------------------------ | ------------- |
+| ≥ 2 capteurs             | Oui           |
+| Sources non gaussiennes  | Oui           |
+| Indépendance statistique | Oui           |
+| Mélange linéaire         | Oui           |
+
+⚠️ Si sources corrélées → séparation difficile.
+
+---
+
+# 📊 4️⃣ KPI de validation
+
+## SIR (Source-to-Interference Ratio)
+
+Avant ICA :
+
+[
+SIR_{in}
+]
+
+Après ICA :
+
+[
+SIR_{out}
+]
+
+### 🎯 Cible
+
+* Gain SIR ≥ 10 dB
+* Fonctionnel jusqu’à SNR = 0 dB
+* Stable sur 1000 runs Monte Carlo
+
+---
+
+# 🔬 5️⃣ Plan de Test Simulation
+
+## Scénario 1 : Cas idéal
+
+* 2 sources
+* SNR = 15 dB
+* Pas de multipath
+
+→ Doit séparer parfaitement.
+
+---
+
+## Scénario 2 : Brouillage fort
+
+* Interférence +3 dB
+* SNR = 5 dB
+
+→ Doit encore isoler la source cible.
+
+---
+
+## Scénario 3 : Source corrélée
+
+* Corrélation 0.3–0.5
+
+→ Mesurer dégradation.
+
+---
+
+## Scénario 4 : Impulsion RF
+
+* Interférence impulsionnelle
+
+→ Tester robustesse.
+
+---
+
+# 📐 6️⃣ Métriques Automatisées
+
+Pour chaque run :
+
+* SIR_in
+* SIR_out
+* Gain_SIR
+* Corrélation source vraie vs estimée
+* Taux échec séparation
+
+---
+
+# 🚦 Critère GO vers hardware
+
+Tu passes en intégration si :
+
+* Gain SIR > 8 dB dans 95% des cas
+* Pas d’instabilité numérique
+* Pas de dépendance critique à un hyperparamètre
+* Pas de collapse quand SNR = 0 dB
+
+---
+
+# ⚠️ Points critiques à surveiller
+
+1. Whitening mal conditionné
+2. Mauvaise normalisation
+3. Trop peu d’échantillons
+4. Sources quasi-gaussiennes
+5. Surapprentissage sur simulation idéale
+
+---
+
+# 🧠 Décision stratégique importante
+
+ICA sera utilisée pour :
+
+* Pré-nettoyer avant MUSIC ?
+* Ou comme détecteur d’anomalie ?
+* Ou comme couche anti-spoofing ?
+
+L’usage exact change les critères de performance.
+
+

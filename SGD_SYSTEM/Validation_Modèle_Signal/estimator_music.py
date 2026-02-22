@@ -96,9 +96,25 @@ def estimate_aoa_music(
 
     peak_heights = spectrum[peaks]
     top_indices = np.argsort(peak_heights)[-n_sources:]
-    aoa_estimates = np.sort(angles[peaks[top_indices]])
-
-    return aoa_estimates
+    
+    aoa_estimates = []
+    for idx in peaks[top_indices]:
+        # Interpolation quadratique pour précision sub-grid
+        if 0 < idx < len(spectrum) - 1:
+            y1, y2, y3 = spectrum[idx-1], spectrum[idx], spectrum[idx+1]
+            # Formule de l'abscisse du sommet d'une parabole
+            # d_idx = (y1 - y3) / (2 * (y1 - 2*y2 + y3))
+            denom = 2 * (y1 - 2*y2 + y3)
+            if abs(denom) > 1e-12:
+                d_idx = (y1 - y3) / denom
+                est_angle = angles[idx] + d_idx * (angles[1] - angles[0])
+            else:
+                est_angle = angles[idx]
+        else:
+            est_angle = angles[idx]
+        aoa_estimates.append(est_angle)
+    
+    return np.sort(np.array(aoa_estimates))
 
 
 if __name__ == "__main__":

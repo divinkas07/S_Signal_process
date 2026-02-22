@@ -49,6 +49,7 @@ def generate_multitone(
     amplitudes: list[float],
     phases: list[float] | None = None,
     fd: float = 0.0,
+    fd_rate: float = 0.0,
 ) -> np.ndarray:
     """
     Génère un signal multi-ton complexe.
@@ -69,7 +70,7 @@ def generate_multitone(
     Returns
     -------
     s : np.ndarray, shape (N,)
-        Signal multi-ton complexe.
+        Signal multi-ton complexe avec décalage Doppler f(t) = fd + fd_rate * t
     """
     K = len(frequencies)
     assert len(amplitudes) == K, "Nombre d'amplitudes ≠ nombre de fréquences"
@@ -82,8 +83,10 @@ def generate_multitone(
 
     s = np.zeros(len(t), dtype=complex)
     for k in range(K):
-        f_shifted = frequencies[k] + fd
-        s += amplitudes[k] * np.exp(1j * (2 * np.pi * f_shifted * t + phases[k]))
+        # f(t) = frequencies[k] + fd + fd_rate * t
+        # Phase = 2π * ∫ f(τ) dτ = 2π * ( (frequencies[k] + fd) * t + 0.5 * fd_rate * t^2 )
+        phase_t = 2 * np.pi * ((frequencies[k] + fd) * t + 0.5 * fd_rate * t**2) + phases[k]
+        s += amplitudes[k] * np.exp(1j * phase_t)
 
     return s
 
@@ -178,6 +181,7 @@ def generate_signal_from_config(config: dict) -> tuple[np.ndarray, np.ndarray, n
         amplitudes=sig["amplitudes"],
         phases=phases,
         fd=dop["fd"],
+        fd_rate=dop.get("fd_rate", 0.0) if dop.get("dynamic", False) else 0.0,
     )
 
     X = generate_array_signal(

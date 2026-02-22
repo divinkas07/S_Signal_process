@@ -1,0 +1,121 @@
+On entre ici dans la validation fondamentale de cohérence physique.
+
+La CRLB (Cramér–Rao Lower Bound) est ton garde-fou théorique.
+Si ton algorithme “fait mieux” que la CRLB → il y a une erreur dans ton modèle, ta métrique ou ton code.
+
+🎯 5️⃣ VALIDATION CRLB
+🎯 Objectif
+
+Vérifier que l’erreur d’estimation observée respecte la limite théorique imposée par la physique.
+
+🧠 1️⃣ Principe Théorique
+
+Pour un estimateur non biaisé :
+
+Var(θ_hat) ≥ CRLB
+RMSE ≥ sqrt(CRLB)
+
+📐 2️⃣ Cas AOA – Réseau M antennes λ/2
+
+Pour une source bande étroite, phase et amplitude inconnues (Deterministic CRLB) :
+
+CRLB(θ) = 6 / ( (2πd/λ)² · cos²θ · M(M²-1) · SNR_lin · N )
+
+où :
+- N = nombre d'échantillons (snapshots)
+- M = nombre d'antennes (ex: M=2 pour un doublet)
+- SNR_lin = Rapport Signal sur Bruit linéaire (P_signal / P_bruit)
+- d = espacement antennes
+- λ = longueur d'onde
+
+🧮 3️⃣ Procédure de Validation
+Étape 1 — Monte Carlo
+
+Pour chaque SNR :
+1. Simuler signal
+2. Estimer θ via MUSIC
+3. Répéter 1000 fois
+4. Calculer RMSE = sqrt( mean( (θ_est - θ_true)^2 ) )
+
+Étape 2 — Calcul CRLB théorique
+À partir des paramètres exacts de simulation.
+
+Étape 3 — Comparaison
+Ratio = RMSE / sqrt(CRLB)
+
+📊 4️⃣ KPI
+Test                Condition
+Validité physique   RMSE ≥ sqrt(CRLB)
+Performance         Ratio < 1.5
+Efficacité          Ratio ≈ 1
+
+🚨 Cas critiques
+❌ Si RMSE < sqrt(CRLB)
+→ bug mathématique probable :
+- erreur normalisation SNR
+- CRLB mal calculée
+- erreur unités (rad vs degrés)
+- estimateur biaisé
+
+❌ Si Ratio > 2
+→ problème :
+- trop peu d’échantillons
+- matrice covariance mal estimée
+- bruit mal modélisé
+- erreur implémentation MUSIC
+
+📜 5️⃣ Script Validation CRLB (AOA)
+Voici un module à intégrer après ton MUSIC Monte Carlo :
+
+import numpy as np
+
+def compute_crlb(snr_db, N, M, d, lam, theta_deg):
+    snr = 10**(snr_db/10)
+    theta = np.deg2rad(theta_deg)
+    
+    # Facteur géométrique
+    beta_sq = (2*np.pi*d/lam)**2
+    cos_sq = np.cos(theta)**2
+    
+    # Formule Deterministic CRLB (pour MUSIC)
+    crlb_var_rad = 6 / (beta_sq * cos_sq * M * (M**2 - 1) * snr * N)
+    
+    return crlb_var_rad  # en rad^2
+
+# Exemple paramètres
+snr_db = 10
+N = 2000
+lam = 0.125
+M = 2
+d = lam / 2
+theta_true = 30
+
+crlb = compute_crlb(snr_db, N, M, d, lam, theta_true)
+crlb_deg = np.rad2deg(np.sqrt(crlb))
+
+print(f"CRLB ({M} antennes) = {crlb_deg:.4f} ° RMS")
+
+📈 6️⃣ Validation complète recommandée
+Faire :
+- Courbe RMSE vs SNR
+- Courbe sqrt(CRLB) vs SNR
+- Graphe ratio RMSE/sqrt(CRLB)
+
+Tu dois observer :
+- RMSE décroît avec SNR
+- RMSE approche sqrt(CRLB) à haut SNR
+- Jamais en dessous
+
+🧠 Ce que prouve cette étape
+Si validé :
+✔ Ton modèle signal est cohérent
+✔ Ton MUSIC est correctement implémenté
+✔ Ton SNR est bien calibré
+✔ Ton Monte Carlo est statistiquement propre
+
+🚦 Condition GO vers hardware
+Tu peux passer à l’intégration RF uniquement si :
+- Ratio < 1.5 sur toute plage SNR
+- Pas un seul cas RMSE < sqrt(CRLB)
+- Stabilité sur 1000 runs
+- Comportement monotone vs SNR
