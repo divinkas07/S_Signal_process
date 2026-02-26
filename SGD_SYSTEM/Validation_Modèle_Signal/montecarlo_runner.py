@@ -61,9 +61,14 @@ def run_montecarlo(config: dict, n_runs_override: int = None, verbose: bool = Tr
         "snr_values": snr_values,
         "aoa_rmse": [],
         "aoa_crlb": [],
+        "freq_rmse": [],
+        "freq_crlb": [],
         "aoa_estimates": {},
         "go_status": True,
     }
+
+    # Calcule la puissance totale théorique (Sigma A_k^2)
+    total_power = np.sum(np.array(sig["amplitudes"])**2)
 
     N = int(sig["fs"] * sig["duration"])
     total = len(snr_values) * n_runs
@@ -81,6 +86,7 @@ def run_montecarlo(config: dict, n_runs_override: int = None, verbose: bool = Tr
 
     for snr_db in snr_values:
         aoa_estimates = []
+        freq_ests = []
 
         # Config temporaire avec SNR modifié
         cfg_run = config.copy()
@@ -91,7 +97,7 @@ def run_montecarlo(config: dict, n_runs_override: int = None, verbose: bool = Tr
             count += 1
 
             # ── Génération ──
-            t, s, X = generate_signal_from_config(cfg_run)
+            t, s, X, fd_eff, fdr_eff = generate_signal_from_config(cfg_run)
 
             # ── Canal ──
             X_noisy, _ = apply_channel(X, cfg_run)
@@ -101,6 +107,12 @@ def run_montecarlo(config: dict, n_runs_override: int = None, verbose: bool = Tr
                 X_noisy, n_sources=1, d_lambda=arr["d_lambda"]
             )
             aoa_estimates.append(aoa_est[0])
+
+            # ── Estimation Frequency (First Tone) ──
+            from metrics import detect_spectral_peaks
+            peaks = detect_spectral_peaks(X_noisy[0], sig["fs"], n_peaks=len(sig["frequencies"]))
+            freq_raw = peaks[0] if len(peaks) > 0 else np.nan
+            freq_ests.append(freq_raw)
 
             if verbose and count % max(1, total // 20) == 0:
                 pct = count / total * 100
@@ -123,19 +135,35 @@ def run_montecarlo(config: dict, n_runs_override: int = None, verbose: bool = Tr
             arr["n_elements"], arr["d_lambda"], snr_db, aoa_true, n_snapshots=N
         )
 
+        # Freq Metrics
+        freq_arr = np.array(freq_ests)
+        valid_f = ~np.isnan(freq_arr)
+        # Use NOMINAL central frequency as truth. 
+        # The LEO chirp creates a physical bias which our reformulated CRLB now accounts for.
+        f_true = sig["frequencies"][0] + fd_eff 
+        if np.sum(valid_f) > 0:
+            rmse_f = rmse(freq_arr[valid_f], np.full(np.sum(valid_f), f_true))
+        else:
+            rmse_f = np.inf
+        
+        alpha = fdr_eff # Use effective fd_rate from generator
+        crlb_f = crlb_frequency(sig["fs"], N, snr_db, sig["amplitudes"][0], total_power, doppler_rate_hz_per_sec=alpha)
+
         results["aoa_rmse"].append(rmse_aoa)
         results["aoa_crlb"].append(crlb_val)
+        results["freq_rmse"].append(rmse_f)
+        results["freq_crlb"].append(crlb_f)
         results["aoa_estimates"][snr_db] = aoa_arr
 
-        # Vérification GO : RMSE ≥ CRLB (l'estimateur ne peut pas battre la borne)
-        if rmse_aoa < crlb_val * 0.5:  # tolérance facteur 0.5 pour estimation MC
+        # Verification GO : RMSE >= CRLB * 0.9 (tolerance stat avec 200+ runs)
+        if rmse_aoa < crlb_val * 0.9 or rmse_f < crlb_f * 0.9:
             results["go_status"] = False
 
         if verbose:
-            status = "✅" if rmse_aoa >= crlb_val * 0.5 else "⚠️"
+            status = "✅" if (rmse_aoa >= crlb_val * 0.9 and rmse_f >= crlb_f * 0.9) else "⚠️"
             print(f"  {status} SNR={snr_db:+3d} dB — "
-                  f"RMSE={rmse_aoa:.4f}° — "
-                  f"CRLB={crlb_val:.4f}°")
+                  f"RMSE_A={rmse_aoa:.4f}° (CRLB={crlb_val:.4f}°) — "
+                  f"RMSE_F={rmse_f:.4f}Hz (CRLB={crlb_f:.4f}Hz)")
 
     elapsed = time.time() - start_time
 
@@ -217,12 +245,13 @@ def plot_rmse_vs_crlb(results: dict, save_path: str = None):
 def main():
     parser = argparse.ArgumentParser(description="SGD Monte Carlo Runner")
     parser.add_argument("--config", default=None, help="Chemin vers config.yaml")
-    parser.add_argument("--quick", action="store_true", help="Mode rapide (10 runs)")
+    parser.add_argument("--quick", action="store_true", help="Mode rapide (50 runs)")
+    parser.add_argument("--runs", type=int, default=200, help="Nombre de runs par SNR (defaut 200)")
     parser.add_argument("--no-plot", action="store_true", help="Désactiver le graphique")
     args = parser.parse_args()
 
     config = load_config(args.config)
-    n_runs = 10 if args.quick else None
+    n_runs = 50 if args.quick else args.runs
 
     results = run_montecarlo(config, n_runs_override=n_runs)
 

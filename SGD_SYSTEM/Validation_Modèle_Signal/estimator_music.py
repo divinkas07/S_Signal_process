@@ -43,7 +43,7 @@ def music_spectrum(
     M, N = X.shape
 
     if angle_range is None:
-        angle_range = np.arange(-90, 90.1, 0.1)
+        angle_range = np.arange(-90, 90.01, 0.05)
 
     # ── Matrice de covariance spatiale ──
     Rxx = (X @ X.conj().T) / N
@@ -97,16 +97,25 @@ def estimate_aoa_music(
     peak_heights = spectrum[peaks]
     top_indices = np.argsort(peak_heights)[-n_sources:]
     
+    # Convert spectrum back to denominator D = 10**(-spectrum_db / 10)
+    # We want the MINIMUM of D
+    denom_lin = 10**(-spectrum / 10.0)
+    
     aoa_estimates = []
     for idx in peaks[top_indices]:
-        # Interpolation quadratique pour précision sub-grid
-        if 0 < idx < len(spectrum) - 1:
-            y1, y2, y3 = spectrum[idx-1], spectrum[idx], spectrum[idx+1]
-            # Formule de l'abscisse du sommet d'une parabole
-            # d_idx = (y1 - y3) / (2 * (y1 - 2*y2 + y3))
-            denom = 2 * (y1 - 2*y2 + y3)
-            if abs(denom) > 1e-12:
-                d_idx = (y1 - y3) / denom
+        # Quadratic interpolation on the DENOMINATOR (bowl shape is more parabola-like)
+        if 0 < idx < len(denom_lin) - 1:
+            y1, y2, y3 = denom_lin[idx-1], denom_lin[idx], denom_lin[idx+1]
+            # Apex of parabola through (-1,y1), (0,y2), (1,y3)
+            # Find MINIMUM this time
+            denom_curve = 2 * (y1 - 2*y2 + y3)
+            if abs(denom_curve) > 1e-15:
+                # Minimum of parabola: x = -b / 2a
+                # b = (y3 - y1) / 2
+                # a = (y1 + y3 - 2*y2) / 2
+                # x = - (y3 - y1) / (2 * (y1 + y3 - 2*y2))
+                d_idx = (y1 - y3) / denom_curve
+                d_idx = np.clip(d_idx, -0.5, 0.5)
                 est_angle = angles[idx] + d_idx * (angles[1] - angles[0])
             else:
                 est_angle = angles[idx]

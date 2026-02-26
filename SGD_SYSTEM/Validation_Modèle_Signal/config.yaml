@@ -37,3 +37,12 @@ montecarlo:
 output:
   save_dir: "./results"
   format: "npz" # npz ou csv
+
+leo_scenario:
+  enabled: true
+  altitude_km: 700
+  v_km_s: 7.5
+  f_carrier_hz: 2000000000
+  noise_std_hz: 5.0
+  duration_s: 600
+  dt_s: 0.1

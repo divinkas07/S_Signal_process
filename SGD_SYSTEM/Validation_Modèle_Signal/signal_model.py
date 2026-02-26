@@ -153,25 +153,62 @@ def generate_array_signal(
     return a @ s_row
 
 
+def get_leo_doppler_at_time(t: float, leo_cfg: dict) -> tuple[float, float]:
+    """
+    Calcule fd et fd_rate à un instant t à partir des paramètres LEO.
+    """
+    v = leo_cfg["v_km_s"] * 1000
+    h = leo_cfg["altitude_km"]
+    fc = leo_cfg["f_carrier_hz"]
+    c = 3e8
+    R_earth = 6371000 # m
+    r = R_earth + h * 1000 if h < 10000 else h # Gestion km vs m
+    mu = 3.986e14
+    omega = np.sqrt(mu / (r**3))
+    
+    t_mid = leo_cfg.get("duration_s", 600) / 2
+    theta = omega * (t - t_mid)
+    
+    # fd = (v/c) * fc * sin(theta)
+    fd = (v / c) * fc * np.sin(theta)
+    
+    # fd_rate = (v/c) * fc * omega * cos(theta)
+    fd_rate = (v / c) * fc * omega * np.cos(theta)
+    
+    return fd, fd_rate
+
+
 # ──────────────────────────────────────────────
 # Wrapper haut niveau depuis config
 # ──────────────────────────────────────────────
 
-def generate_signal_from_config(config: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def generate_signal_from_config(config: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, float]:
     """
     Génère le signal complet à partir de la configuration.
-
+    Si leo_scenario est activé, surcharge fd et fd_rate.
+    
     Returns
     -------
     t : np.ndarray — vecteur temps
     s : np.ndarray — signal mono-canal (N,)
     X : np.ndarray — signal sur ULA (n_elements, N)
+    fd : float — Doppler effectif utilisé
+    fd_rate : float — Dérive Doppler effective utilisée
     """
     sig = config["signal"]
     dop = config["doppler"]
     arr = config["array"]
+    leo = config.get("leo_scenario", {"enabled": False})
 
     t = generate_time_vector(sig["fs"], sig["duration"])
+
+    fd = dop["fd"]
+    fd_rate = dop.get("fd_rate", 0.0) if dop.get("dynamic", False) else 0.0
+
+    if leo.get("enabled", False):
+        # On calcule le Doppler à t=0 pour le bloc de signal
+        # (Ou on pourrait passer t_start dans le config si on voulait simuler un autre moment du pass)
+        fd, fd_rate = get_leo_doppler_at_time(0, leo)
 
     phases = sig.get("phases", None)
 
@@ -180,8 +217,8 @@ def generate_signal_from_config(config: dict) -> tuple[np.ndarray, np.ndarray, n
         frequencies=sig["frequencies"],
         amplitudes=sig["amplitudes"],
         phases=phases,
-        fd=dop["fd"],
-        fd_rate=dop.get("fd_rate", 0.0) if dop.get("dynamic", False) else 0.0,
+        fd=fd,
+        fd_rate=fd_rate,
     )
 
     X = generate_array_signal(
@@ -191,7 +228,7 @@ def generate_signal_from_config(config: dict) -> tuple[np.ndarray, np.ndarray, n
         aoa_deg=arr["aoa_deg"],
     )
 
-    return t, s, X
+    return t, s, X, fd, fd_rate
 
 
 # ──────────────────────────────────────────────

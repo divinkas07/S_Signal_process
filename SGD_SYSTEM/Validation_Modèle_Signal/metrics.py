@@ -16,8 +16,11 @@ def detect_spectral_peaks(s: np.ndarray, fs: float, n_peaks: int) -> np.ndarray:
     Detecte les n_peaks frequences dominantes dans le spectre avec interpolation.
     """
     N = len(s)
-    S = np.abs(np.fft.fft(s))[:N // 2]
-    freqs = np.fft.fftfreq(N, d=1 / fs)[:N // 2]
+    # Zero-padding pour meilleure résolution (interpolation plus fine)
+    N_fft = max(N, 8192)
+    S = np.fft.fftshift(np.abs(np.fft.fft(s, n=N_fft)))
+    freqs = np.fft.fftshift(np.fft.fftfreq(N_fft, d=1 / fs))
+    df = freqs[1] - freqs[0]
     
     # Trouver les indices des n_peaks plus grands
     # Mais on veut éviter les bins adjacents au même pic
@@ -38,7 +41,9 @@ def detect_spectral_peaks(s: np.ndarray, fs: float, n_peaks: int) -> np.ndarray:
     
     for idx in peaks_idx:
         if 0 < idx < len(S) - 1:
-            y1, y2, y3 = S[idx-1], S[idx], S[idx+1]
+            # On utilise l'interpolation parabolique sur le LOG-magnitude 
+            # (bien plus précis pour un pic de type sinc)
+            y1, y2, y3 = np.log(S[idx-1] + 1e-12), np.log(S[idx] + 1e-12), np.log(S[idx+1] + 1e-12)
             denom = 2 * (y1 - 2*y2 + y3)
             if abs(denom) > 1e-12:
                 d_idx = (y1 - y3) / denom

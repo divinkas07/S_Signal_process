@@ -44,8 +44,14 @@ from rich import box
 from signal_model import load_config, generate_signal_from_config, generate_time_vector, generate_multitone
 from channel_model import apply_channel, signal_power
 from estimator_music import estimate_aoa_music, music_spectrum
+from estimator_ica import estimate_ica
+from estimator_imm import create_doppler_imm
 from crlb import crlb_aoa, crlb_frequency, compute_crlb_from_config
-from metrics import rmse, mae
+from metrics import rmse, mae, detect_spectral_peaks, compute_doppler_error, compute_sir
+
+# ── Dynamic IMM Industrial ──
+from IMM_industrial.leo_doppler_sim import generate_leo_trajectory, add_maneuver
+from IMM_industrial.imm_tracker import IndustrialIMMTracker
 
 console = Console()
 
@@ -135,7 +141,21 @@ def display_config(cfg: dict):
     t_mc.add_row("n_runs",    str(mc["n_runs"]))
     t_mc.add_row("snr_range", str(mc["snr_range"]))
 
-    console.print(Columns([t_sig, t_ch, t_arr, t_mc], equal=False, expand=False))
+    # ── LEO Scenario ──
+    t_leo = Table(title="Satellite LEO", box=box.SIMPLE_HEAD)
+    t_leo.add_column("Paramètre", style="cyan")
+    t_leo.add_column("Valeur", style="white")
+    if cfg.get("leo_scenario"):
+        leo = cfg["leo_scenario"]
+        t_leo.add_row("Activé", "[green]OUI[/]" if leo["enabled"] else "[dim]NON[/]")
+        t_leo.add_row("Altitude", f"{leo['altitude_km']} km")
+        t_leo.add_row("Vitesse", f"{leo['v_km_s']} km/s")
+        t_leo.add_row("Porteuse", f"{leo['f_carrier_hz']/1e9:.1f} GHz")
+        t_leo.add_row("Passage", f"{leo['duration_s']} s")
+    else:
+        t_leo.add_row("Status", "[dim]Non configuré[/]")
+
+    console.print(Columns([t_sig, t_ch, t_arr, t_mc, t_leo], equal=False, expand=False))
 
 
 # ══════════════════════════════════════════════
@@ -299,6 +319,32 @@ def edit_montecarlo_params(cfg: dict):
     ok("Paramètres Monte Carlo mis à jour.")
 
 
+def edit_leo_params(cfg: dict):
+    section("Édition — Scenario Satellite LEO")
+    if "leo_scenario" not in cfg:
+        cfg["leo_scenario"] = {
+            "enabled": True, "altitude_km": 700, "v_km_s": 7.5,
+            "f_carrier_hz": 2e9, "noise_std_hz": 5.0, "duration_s": 600, "dt_s": 0.1
+        }
+    leo = cfg["leo_scenario"]
+
+    leo["enabled"] = Confirm.ask("  Activer le scenario LEO ?", default=leo["enabled"])
+    
+    raw = Prompt.ask(f"  Altitude (km) [dim]({leo['altitude_km']})[/]", default=str(leo["altitude_km"]))
+    leo["altitude_km"] = float(raw)
+    
+    raw = Prompt.ask(f"  Vitesse (km/s) [dim]({leo['v_km_s']})[/]", default=str(leo["v_km_s"]))
+    leo["v_km_s"] = float(raw)
+    
+    raw = Prompt.ask(f"  Fréquence Porteuse (Hz) [dim]({leo['f_carrier_hz']})[/]", default=str(int(leo["f_carrier_hz"])))
+    leo["f_carrier_hz"] = float(raw)
+    
+    raw = Prompt.ask(f"  Bruit Mesure σ (Hz) [dim]({leo['noise_std_hz']})[/]", default=str(leo["noise_std_hz"]))
+    leo["noise_std_hz"] = float(raw)
+
+    ok("Scenario LEO mis à jour.")
+
+
 # ══════════════════════════════════════════════
 # Simulation rapide (single shot)
 # ══════════════════════════════════════════════
@@ -312,11 +358,14 @@ def run_quick_sim(cfg: dict):
 
     console.print(f"  SNR        : [cyan]{ch['snr_db']} dB[/]")
     console.print(f"  AOA vrai   : [cyan]{arr['aoa_deg']}°[/]")
-    console.print(f"  Fréquences : [cyan]{sig['frequencies']} Hz[/]\n")
+    console.print(f"  Fréquences : [cyan]{sig['frequencies']} Hz[/]")
+    if cfg.get("leo_scenario", {}).get("enabled"):
+        ok("Scenario LEO actif (Doppler calculé dynamiquement)")
+    console.print()
 
     try:
         with console.status("[bold cyan]Génération du signal…[/]", spinner="dots"):
-            t, s, X = generate_signal_from_config(cfg)
+            t, s, X, fd_eff, fdr_eff = generate_signal_from_config(cfg)
 
         with console.status("[bold cyan]Application du canal…[/]", spinner="dots"):
             X_noisy, noise = apply_channel(X, cfg)
@@ -328,10 +377,26 @@ def run_quick_sim(cfg: dict):
             aoa_est = estimate_aoa_music(X_noisy, n_sources=1, d_lambda=arr["d_lambda"])
             aoa_true = arr["aoa_deg"]
 
-        # CRLB
+        # CRLB AOA (Standard)
         N = len(t)
-        crlb_val = crlb_aoa(arr["n_elements"], arr["d_lambda"],
-                             ch["snr_db"], aoa_true, n_snapshots=N)
+        crlb_aoa_val = crlb_aoa(arr["n_elements"], arr["d_lambda"],
+                               ch["snr_db"], aoa_true, n_snapshots=N)
+        
+        # Doppler Estimation (First Tone)
+        # s is the mono-channel reference, but we estimate from X_noisy[0] (first antenna)
+        # or from s directly if we want to test the freq estimator alone?
+        # Let's estimate from X_noisy[0] to be realistic.
+        fs = sig["fs"]
+        peaks = detect_spectral_peaks(X_noisy[0], fs, n_peaks=len(sig["frequencies"]))
+        f_est = peaks[0] if len(peaks) > 0 else np.nan
+        f_true = sig["frequencies"][0] + cfg["doppler"]["fd"]
+        
+        # CRLB Frequency (LEO Rigorous)
+        # Doppler rate alpha for bias calculation
+        fdr = cfg["doppler"]["fd_rate"] if cfg["doppler"].get("dynamic") else 0.0
+        crlb_freq_val = crlb_frequency(fs, N, ch["snr_db"], sig["amplitudes"][0], 
+                                      total_power=np.sum(np.array(sig["amplitudes"])**2),
+                                      doppler_rate_hz_per_sec=fdr)
 
     except Exception as e:
         err(f"Erreur durant la simulation : {e}")
@@ -344,31 +409,43 @@ def run_quick_sim(cfg: dict):
     t_res.add_column("Valeur",            style="white", width=20)
     t_res.add_column("Unité",             style="dim",   width=12)
 
-    t_res.add_row("Échantillons N",       str(N),              "pts")
-    t_res.add_row("P_signal (array)",     fmt_float(p_sig),    "lin")
-    t_res.add_row("P_bruit",              fmt_float(p_noise),  "lin")
-    t_res.add_row("SNR mesuré",           fmt_float(snr_meas), "dB")
-    t_res.add_row("AOA vrai",             fmt_float(aoa_true, 2), "°")
-
-    if not np.all(np.isnan(aoa_est)):
-        aoa_val = aoa_est[0]
-        err_val = abs(aoa_val - aoa_true)
-        color = "green" if err_val < crlb_val * 2 else "red"
-        t_res.add_row("AOA estimé (MUSIC)",  f"[{color}]{fmt_float(aoa_val, 4)}[/]", "°")
-        t_res.add_row("Erreur |Δ AOA|",      f"[{color}]{fmt_float(err_val, 4)}[/]", "°")
-    else:
-        t_res.add_row("AOA estimé (MUSIC)",  "[red]NaN — pas de pic détecté[/]", "°")
-        t_res.add_row("Erreur |Δ AOA|",      "—", "°")
+    t_res.add_section()
+    t_res.add_row("CRLB AOA (√Var)",      fmt_float(crlb_aoa_val, 4), "°")
 
     t_res.add_section()
-    t_res.add_row("CRLB AOA (√Var)",      fmt_float(crlb_val, 4), "°")
+    t_res.add_row("Fréq. vraie (f1+fd)",  fmt_float(f_true, 1),      "Hz")
+    if not np.isnan(f_est):
+        f_err = abs(f_est - f_true)
+        f_color = "green" if f_err < crlb_freq_val * 3 else "yellow"
+        t_res.add_row("Fréq. estimée",      f"[{f_color}]{fmt_float(f_est, 1)}[/]", "Hz")
+        t_res.add_row("Erreur |Δf|",        f"[{f_color}]{fmt_float(f_err, 4)}[/]", "Hz")
+    else:
+        t_res.add_row("Fréq. estimée",      "[red]NaN[/]",             "Hz")
+    
+    t_res.add_row("CRLB Fréq (√Var)",     fmt_float(crlb_freq_val, 4), "Hz")
 
     # Verdict
     if not np.all(np.isnan(aoa_est)):
-        go = aoa_est[0] is not None and abs(aoa_est[0] - aoa_true) < crlb_val * 3
-        verdict = "[bold green]✔ Estimateur cohérent[/]" if go else "[bold yellow]⚠ Erreur > 3×CRLB[/]"
+        # Critères physiques : RMSE >= CRLB
+        # Critères performance : RMSE < 1.5 * CRLB
+        aoa_val = aoa_est[0]
+        err_aoa = abs(aoa_val - aoa_true)
+        
+        is_physical = err_aoa >= crlb_aoa_val * 0.9  # 0.9 pour tolérance MC/single
+        is_optimal  = err_aoa < crlb_aoa_val * 2.0   # 2.0 pour single shot (bruité)
+        
+        if err_aoa < crlb_aoa_val * 0.2:
+             verdict = "[bold red]✖ NON-PHYSIQUE (Trop beau pour être vrai)[/]"
+             v_style = "red"
+        elif is_optimal:
+             verdict = "[bold green]✔ Estimateur optimal[/]"
+             v_style = "green"
+        else:
+             verdict = "[bold yellow]⚠ Performance dégradée (> 2×CRLB)[/]"
+             v_style = "yellow"
     else:
         verdict = "[bold red]✖ Estimation échouée[/]"
+        v_style = "red"
 
     console.print(t_res)
     console.print(Panel(verdict, title="Verdict", border_style="cyan"))
@@ -384,23 +461,29 @@ def run_montecarlo(cfg: dict):
     mc  = cfg["montecarlo"]
     arr = cfg["array"]
     sig = cfg["signal"]
+    dop = cfg["doppler"]
 
     snr_values = mc["snr_range"]
 
     # Quick mode ?
-    quick = Confirm.ask("  Mode rapide (10 runs/SNR pour test) ?", default=False)
-    n_runs = 10 if quick else mc["n_runs"]
+    quick = Confirm.ask("  Mode rapide (20 runs/SNR pour test) ?", default=False)
+    n_runs = 20 if quick else 200
 
     total = len(snr_values) * n_runs
 
     console.print(f"\n  SNR range : [cyan]{snr_values}[/]")
     console.print(f"  Runs/SNR  : [cyan]{n_runs}[/]")
-    console.print(f"  Total     : [cyan]{total} runs[/]\n")
+    console.print(f"  Total     : [cyan]{total} runs[/]")
+    if cfg.get("leo_scenario", {}).get("enabled"):
+        ok("Scenario LEO actif (Doppler calculé dynamiquement)")
+    console.print()
 
     results = {
         "snr_values": snr_values,
         "aoa_rmse":   [],
         "aoa_crlb":   [],
+        "freq_rmse":  [],
+        "freq_crlb":  [],
         "go_flags":   [],
     }
 
@@ -428,30 +511,77 @@ def run_montecarlo(cfg: dict):
             cfg_run = copy.deepcopy(cfg)
             cfg_run["channel"]["snr_db"] = snr_db
 
+            # Puissance totale théorique (somme des A_k^2 pour complexes)
+            total_power = np.sum(np.array(sig["amplitudes"])**2)
+
+            aoa_true = arr["aoa_deg"]
             aoa_ests = []
+            freq_ests = []
+            crlb_a_list = []
+            crlb_f_list = []
 
             for _ in range(n_runs):
-                t, s, X = generate_signal_from_config(cfg_run)
-                X_noisy, _ = apply_channel(X, cfg_run)
+                t, s, X, fd_eff, fdr_eff = generate_signal_from_config(cfg_run)
+                X_noisy, noise = apply_channel(X, cfg_run)
+                
+                # Mesure du SNR réel pour cette itération
+                p_sig_real = signal_power(X)
+                p_noise_real = signal_power(noise)
+                snr_lin_real = p_sig_real / p_noise_real if p_noise_real > 0 else 1e12
+                
+                # AOA
                 est = estimate_aoa_music(X_noisy, n_sources=1,
                                          d_lambda=arr["d_lambda"])
                 aoa_ests.append(est[0])
+                
+                # Doppler (f1)
+                peaks = detect_spectral_peaks(X_noisy[0], sig["fs"], n_peaks=len(sig["frequencies"]))
+                freq_ests.append(peaks[0] if len(peaks) > 0 else np.nan)
+                
+                # CRLB individuels (Rigoureux)
+                alpha = dop.get("fd_rate", 0.0) if dop.get("dynamic") else 0.0
+                crlb_a_list.append(crlb_aoa(arr["n_elements"], arr["d_lambda"],
+                                           10 * np.log10(snr_lin_real), aoa_true, n_snapshots=N))
+                crlb_f_list.append(crlb_frequency(sig["fs"], N, 10 * np.log10(snr_lin_real), 
+                                                 sig["amplitudes"][0], total_power, 
+                                                 doppler_rate_hz_per_sec=alpha))
+                
                 progress.advance(overall)
                 progress.advance(snr_task)
 
+            # Statistiques
             aoa_arr = np.array(aoa_ests, dtype=float)
-            valid = ~np.isnan(aoa_arr)
-            aoa_true = arr["aoa_deg"]
+            valid_aoa = ~np.isnan(aoa_arr)
+            rmse_aoa = rmse(aoa_arr[valid_aoa], np.full(np.sum(valid_aoa), aoa_true)) \
+                       if np.sum(valid_aoa) > 0 else np.inf
+            
+            # On utilise la MOYENNE des CRLB (en variance c'est plus propre, mais ici les SNR sont proches)
+            crlb_a = np.mean(crlb_a_list)
+            crlb_f = np.mean(crlb_f_list)
 
-            rmse_val = rmse(aoa_arr[valid], np.full(np.sum(valid), aoa_true)) \
-                       if np.sum(valid) > 0 else np.inf
+            # Freq Stats
+            freq_arr = np.array(freq_ests, dtype=float)
+            valid_f = ~np.isnan(freq_arr)
+            # On utilise le Doppler EFFECTIF retourné par le générateur
+            # On ajoute le décalage spectral moyen dû à la dérive Doppler (0.5 * fd_rate * Duration)
+            f_true = sig["frequencies"][0] + fd_eff + 0.5 * fdr_eff * sig["duration"]
+            rmse_f = rmse(freq_arr[valid_f], np.full(np.sum(valid_f), f_true)) \
+                     if np.sum(valid_f) > 0 else np.inf
 
-            crlb_val = crlb_aoa(arr["n_elements"], arr["d_lambda"],
-                                  snr_db, aoa_true, n_snapshots=N)
+            # Critères de Validation (D'après crlb_descript)
+            # 1. Physical Validity: RMSE >= sqrt(CRLB) * 0.95 (marge stat)
+            # 2. Performance: RMSE < sqrt(CRLB) * 1.5
+            ratio_a = rmse_aoa / crlb_a if crlb_a > 0 else np.nan
+            
+            # GO si physique ET performant
+            is_phys = (rmse_aoa >= crlb_a * 0.95)
+            is_perf = (ratio_a < 1.5)
+            go = is_phys and is_perf
 
-            go = rmse_val >= crlb_val * 0.5
-            results["aoa_rmse"].append(rmse_val)
-            results["aoa_crlb"].append(crlb_val)
+            results["aoa_rmse"].append(rmse_aoa)
+            results["aoa_crlb"].append(crlb_a)
+            results["freq_rmse"].append(rmse_f)
+            results["freq_crlb"].append(crlb_f)
             results["go_flags"].append(go)
 
     elapsed = time.time() - start_time
@@ -467,13 +597,27 @@ def run_montecarlo(cfg: dict):
 
     global_go = all(results["go_flags"])
 
-    for snr_db, rmse_v, crlb_v, go in zip(
-        results["snr_values"], results["aoa_rmse"],
-        results["aoa_crlb"], results["go_flags"]
-    ):
+    for idx in range(len(results["snr_values"])):
+        snr_db = results["snr_values"][idx]
+        rmse_v = results["aoa_rmse"][idx]
+        crlb_v = results["aoa_crlb"][idx]
+        go     = results["go_flags"][idx]
+        
         ratio = rmse_v / crlb_v if crlb_v > 0 and rmse_v != np.inf else float("nan")
-        go_str = "[bold green]✔[/]" if go else "[bold red]✖[/]"
-        ratio_str = f"{ratio:.2f}" if not np.isnan(ratio) else "—"
+        
+        if np.isnan(ratio):
+            go_str = "[dim]—[/]"
+            ratio_str = "—"
+        elif rmse_v < crlb_v * 0.95:
+            go_str = "[bold red]NON-PHYS[/]"
+            ratio_str = f"[red]{ratio:.2f}[/]"
+        elif ratio < 1.5:
+            go_str = "[bold green]PASS[/]"
+            ratio_str = f"[green]{ratio:.2f}[/]"
+        else:
+            go_str = "[bold yellow]FAIL[/]"
+            ratio_str = f"[yellow]{ratio:.2f}[/]"
+
         t_mc.add_row(
             f"{snr_db:+3d}",
             fmt_float(rmse_v, 6),
@@ -482,7 +626,18 @@ def run_montecarlo(cfg: dict):
             go_str,
         )
 
+    # Tableau Doppler (Optionnel si RMSE dispo)
+    t_f = Table(title="Résultats Monte Carlo — RMSE Frequence",
+                 box=box.ROUNDED, show_header=True, header_style="bold cyan")
+    t_f.add_column("SNR (dB)",   style="cyan",  justify="right", width=10)
+    t_f.add_column("RMSE f (Hz)", style="white", justify="right", width=14)
+    t_f.add_column("CRLB f (Hz)", style="white", justify="right", width=14)
+    
+    for snr_db, rf, cf in zip(results["snr_values"], results["freq_rmse"], results["freq_crlb"]):
+        t_f.add_row(f"{snr_db:+3d}", fmt_float(rf, 6), fmt_float(cf, 6))
+
     console.print(t_mc)
+    console.print(t_f)
 
     verdict_color = "green" if global_go else "red"
     verdict_text  = "🚦 GO — Tous les critères satisfaits" if global_go \
@@ -506,9 +661,11 @@ def inspect_crlb(cfg: dict):
     sig = cfg["signal"]
     arr = cfg["array"]
     mc  = cfg["montecarlo"]
+    dop = cfg["doppler"]
     N   = int(sig["fs"] * sig["duration"])
 
     snr_range = mc["snr_range"]
+    total_power = np.sum(np.array(sig["amplitudes"])**2)
 
     # ── CRLB Fréquentielle ──
     t_freq = Table(title="CRLB — Estimation Fréquentielle", box=box.SIMPLE_HEAD,
@@ -524,7 +681,8 @@ def inspect_crlb(cfg: dict):
     for k, (f, a) in enumerate(zip(sig["frequencies"], sig["amplitudes"])):
         row = [str(k+1), f"{f:.1f}", f"{a:.3f}"]
         for snr_db in snr_range:
-            c = crlb_frequency(sig["fs"], N, snr_db, a)
+            fdr = dop.get("fd_rate", 0.0) if dop.get("dynamic") else 0.0
+            c = crlb_frequency(sig["fs"], N, snr_db, a, total_power, doppler_rate_hz_per_sec=fdr)
             row.append(f"{c:.4e}")
         t_freq.add_row(*row)
 
@@ -561,8 +719,172 @@ def inspect_crlb(cfg: dict):
 
 
 # ══════════════════════════════════════════════
-# Sauvegarde de la config
+# Pipeline Complet (Signal -> Canal -> ICA -> MUSIC -> IMM)
 # ══════════════════════════════════════════════
+
+def run_full_pipeline(cfg: dict):
+    section("Pipeline Complet — Algorithme Intégral")
+    
+    sig = cfg["signal"]
+    arr = cfg["array"]
+    dop = cfg["doppler"]
+    ch  = cfg["channel"]
+    
+    console.print(f"  [bold]1. Génération & Canal[/]")
+    with console.status("Génération..."):
+        t, s_ref, X, fd_eff, fdr_eff = generate_signal_from_config(cfg)
+        X_noisy, _ = apply_channel(X, cfg)
+        ok("Signal reçu bruité généré.")
+
+    console.print(f"\n  [bold]2. Séparation de Sources (ICA)[/]")
+    with console.status("Exécution ICA..."):
+        # On essaie d'extraire autant de composantes qu'il y a de fréquences ou simplement 1 si 1 source
+        n_comp = len(sig["frequencies"]) if len(sig["frequencies"]) > 0 else 1
+        S_est, W_glob, _ = estimate_ica(X_noisy, n_components=n_comp)
+        ok(f"ICA terminée. Sources extraites : {S_est.shape[0]}")
+
+    console.print(f"\n  [bold]3. Estimation Directionnelle (MUSIC) & Doppler[/]")
+    with console.status("Estimation..."):
+        # MUSIC sur le signal original bruité (traditionnel)
+        aoa_est = estimate_aoa_music(X_noisy, n_sources=1, d_lambda=arr["d_lambda"])
+        
+        # Doppler sur la composante ICA la plus forte (ou première)
+        # On utilise S_est[0] qui devrait être notre source principale séparée
+        peaks = detect_spectral_peaks(S_est[0], sig["fs"], n_peaks=1)
+        freq_raw = peaks[0] if len(peaks) > 0 else np.nan
+        ok(f"AOA estimé : {aoa_est[0]:.2f}°")
+        ok(f"Fréq estimée (post-ICA) : {freq_raw:.1f} Hz")
+
+    if dop.get("dynamic", False) or cfg.get("leo_scenario", {}).get("enabled"):
+        console.print(f"\n  [bold]4. Tracking IMM (Doppler Dynamique)[/]")
+        with console.status("Tracking..."):
+            # Pour le pipeline sur bloc unique, on utilise un dt arbitraire ou celui du LEO
+            dt = cfg.get("leo_scenario", {}).get("dt_s", 0.1)
+            tracker = IndustrialIMMTracker(dt=dt)
+            
+            # Prediction/Update sur le point estimé
+            tracker.predict()
+            tracker.update(freq_raw)
+            
+            freq_final = tracker.x[0]
+            ok(f"IMM filtré : {freq_final:.1f} Hz (Model Probs: {tracker.mu})")
+    else:
+        freq_final = freq_raw
+
+    # Résultats Finaux
+    section("Synthèse Pipeline")
+    t_res = Table(box=box.DOUBLE)
+    t_res.add_column("Bloc", style="cyan")
+    t_res.add_column("Grandeur", style="white")
+    t_res.add_column("Valeur", justify="right")
+    
+    t_res.add_row("Canal", "SNR Mesuré", f"{ch['snr_db']} dB")
+    t_res.add_row("ICA", "Entrées/Sorties", f"{X.shape[0]} / {S_est.shape[0]}")
+    t_res.add_row("MUSIC", "AOA", f"{aoa_est[0]:.4f} °")
+    t_res.add_row("IMM", "Fréq Finale", f"{freq_final:.2f} Hz")
+    
+    console.print(t_res)
+    ok("Simulation du Pipeline Complet terminée.")
+
+
+def run_imm_industrial_sim(cfg: dict):
+    """Exécute la simulation IMM industrielle (LEO Satellite)."""
+    section("Tracking Doppler IMM — Satellite LEO")
+
+    leo = cfg.get("leo_scenario", {
+        "enabled": True, "altitude_km": 700, "v_km_s": 7.5,
+        "f_carrier_hz": 2e9, "noise_std_hz": 5.0, "duration_s": 600, "dt_s": 0.1
+    })
+
+    # Paramètres depuis config
+    duration = leo["duration_s"]
+    dt = leo["dt_s"]
+    maneuver_start = 400
+    
+    # Affichage des paramètres
+    t_param = Table(title="Paramètres Tracking LEO", box=box.SIMPLE)
+    t_param.add_column("Paramètre", style="cyan")
+    t_param.add_column("Valeur", style="white")
+    t_param.add_row("Altitude", f"{leo['altitude_km']} km")
+    t_param.add_row("Vitesse", f"{leo['v_km_s']} km/s")
+    t_param.add_row("Porteuse (fc)", f"{leo['f_carrier_hz']/1e9:.1f} GHz")
+    t_param.add_row("Bruit (σ)", f"{leo['noise_std_hz']} Hz")
+    console.print(t_param)
+
+    with console.status("[bold cyan]Simulation de la trajectoire LEO…[/]", spinner="earth"):
+        t, fd_true, fd_meas = generate_leo_trajectory(
+            duration=duration, dt=dt, 
+            altitude_km=leo["altitude_km"], v_km_s=leo["v_km_s"], 
+            f_carrier_hz=leo["f_carrier_hz"], noise_std_hz=leo["noise_std_hz"]
+        )
+        # Ajout d'une manœuvre pour tester la robustesse
+        fd_truth_maneuver = add_maneuver(t, fd_true, maneuver_start=maneuver_start, maneuver_duration=50, accel_hz_s2=2.0)
+        fd_meas_maneuver = fd_truth_maneuver + np.random.normal(0, 5.0, size=len(t))
+    
+    tracker = IndustrialIMMTracker(dt=dt)
+    n = len(t)
+    results_imm = np.zeros(n)
+    probs_imm = np.zeros((n, 3))
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]Tracking IMM…[/]"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        console=console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("Filtrage", total=n)
+        for i in range(n):
+            z = fd_meas_maneuver[i]
+            tracker.predict()
+            tracker.update(z)
+            results_imm[i] = tracker.x[0]
+            probs_imm[i] = tracker.mu
+            progress.advance(task)
+
+    # Calcul RMSE
+    rmse_val = np.sqrt(np.mean((results_imm - fd_truth_maneuver)**2))
+    
+    # Affichage des résultats
+    t_res = Table(title="Résultats IMM Tracking", box=box.ROUNDED)
+    t_res.add_column("Métrique", style="cyan")
+    t_res.add_column("Valeur", justify="right")
+    t_res.add_row("RMSE Finale", f"{rmse_val:.4f} Hz")
+    t_res.add_row("Bruit Mesure (sim)", "5.0 Hz RMS")
+    
+    console.print(t_res)
+    
+    # Verdict sur la robustesse
+    prob_maneuver_max = np.max(probs_imm[maneuver_start*10:(maneuver_start+50)*10, 2])
+    if prob_maneuver_max > 0.5:
+        ok(f"Détection de manœuvre réussie (Prob Max: {prob_maneuver_max:.2f})")
+    else:
+        warn(f"Sensibilité manœuvre faible (Prob Max: {prob_maneuver_max:.2f})")
+
+    if Confirm.ask("\n  Générer le rapport graphique ?", default=True):
+        import matplotlib.pyplot as plt
+        fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+        axes[0].plot(t, fd_truth_maneuver, 'k', label='Ground Truth')
+        axes[0].plot(t, results_imm, 'r', label='IMM Track', alpha=0.8)
+        axes[0].set_ylabel("Doppler (Hz)")
+        axes[0].legend()
+        axes[0].grid(True)
+        
+        axes[1].plot(t, probs_imm[:, 0], label='Mode 1 (Const)')
+        axes[1].plot(t, probs_imm[:, 1], label='Mode 2 (Drift)')
+        axes[1].plot(t, probs_imm[:, 2], label='Mode 3 (Maneuver)')
+        axes[1].set_ylabel("Probabilités")
+        axes[1].set_xlabel("Temps (s)")
+        axes[1].legend()
+        axes[1].grid(True)
+        
+        save_path = "dynamic_imm_report.png"
+        plt.tight_layout()
+        plt.savefig(save_path)
+        ok(f"Rapport sauvegardé : [cyan]{save_path}[/]")
+        # plt.show() # On évite de bloquer la TUI si possible
+
 
 def save_config(cfg: dict, config_path: Path):
     section("Sauvegarde — config.yaml")
@@ -588,9 +910,12 @@ def build_menu(cfg: dict, config_path: Path) -> dict:
         "2": ("Paramètres Canal",              lambda: edit_channel_params(cfg)),
         "3": ("Paramètres Réseau ULA",         lambda: edit_array_params(cfg)),
         "4": ("Paramètres Monte Carlo",        lambda: edit_montecarlo_params(cfg)),
+        "11": ("Paramètres Scenario LEO",      lambda: edit_leo_params(cfg)),
         # ── Runners ──
         "5": ("Run — Simulation Rapide",       lambda: run_quick_sim(cfg)),
         "6": ("Run — Monte Carlo",             lambda: run_montecarlo(cfg)),
+        "10": ("Run — IMM Industrial (LEO)",   lambda: run_imm_industrial_sim(cfg)),
+        "9": ("Run — Pipeline Complet",        lambda: run_full_pipeline(cfg)),
         # ── Analyse ──
         "7": ("Inspecteur CRLB",               lambda: inspect_crlb(cfg)),
         # ── Système ──
