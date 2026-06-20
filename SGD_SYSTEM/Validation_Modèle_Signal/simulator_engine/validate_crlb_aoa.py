@@ -13,18 +13,14 @@ import sys
 import os
 from pathlib import Path
 
-# Configuration des chemins pour importer les modules du projet
-ROOT_DIR = Path(__file__).parent
-sys.path.append(str(ROOT_DIR))
+# Adjust sys.path to allow absolute imports from the root if run directly
+if __name__ == "__main__" and __package__ is None:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-try:
-    from signal_model import generate_array_signal, load_config
-    from channel_model import generate_awgn
-    from crlb import crlb_aoa
-    from estimator_music import estimate_aoa_music
-except ImportError as e:
-    print(f"Erreur d'importation : {e}")
-    sys.exit(1)
+from simulator_engine.signal_model import generate_array_signal, load_config
+from simulator_engine.channel_model import generate_awgn
+from core_algorithms.crlb import crlb_aoa
+from core_algorithms.estimator_music import estimate_aoa_music
 
 def run_crlb_validation_sweep():
     # ── Paramètres de Simulation ──

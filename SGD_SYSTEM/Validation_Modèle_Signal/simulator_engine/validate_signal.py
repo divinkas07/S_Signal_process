@@ -8,12 +8,16 @@ Refactored class-based implementation for signal model validation.
 import numpy as np
 from scipy import stats
 import sys
-import traceback
+from pathlib import Path
 
-from signal_model import load_config, generate_time_vector, generate_multitone
-from channel_model import apply_channel, signal_power
-from validation_report import get_report
-from metrics import detect_spectral_peaks, compute_spectral_error, compute_snr_error, compute_doppler_error, compute_doppler_rate_error
+# Adjust sys.path to allow absolute imports from the root if run directly
+if __name__ == "__main__" and __package__ is None:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from simulator_engine.signal_model import load_config, generate_time_vector, generate_multitone
+from simulator_engine.channel_model import apply_channel, signal_power
+from simulator_engine.validation_report import get_report
+from core_algorithms.metrics import detect_spectral_peaks, compute_spectral_error, compute_snr_error, compute_doppler_error, compute_doppler_rate_error
 
 class SignalValidator:
     """

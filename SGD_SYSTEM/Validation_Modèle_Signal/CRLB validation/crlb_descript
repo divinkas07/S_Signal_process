@@ -3,19 +3,19 @@ On entre ici dans la validation fondamentale de cohérence physique.
 La CRLB (Cramér–Rao Lower Bound) est ton garde-fou théorique.
 Si ton algorithme “fait mieux” que la CRLB → il y a une erreur dans ton modèle, ta métrique ou ton code.
 
-🎯 5️⃣ VALIDATION CRLB
-🎯 Objectif
+ VALIDATION CRLB
+ Objectif
 
 Vérifier que l’erreur d’estimation observée respecte la limite théorique imposée par la physique.
 
-🧠 1️⃣ Principe Théorique
+ Principe Théorique
 
 Pour un estimateur non biaisé :
 
 Var(θ_hat) ≥ CRLB
 RMSE ≥ sqrt(CRLB)
 
-📐 2️⃣ Cas AOA – Réseau M antennes λ/2
+ Cas AOA – Réseau M antennes λ/2
 
 Pour une source bande étroite, phase et amplitude inconnues (Deterministic CRLB) :
 
@@ -28,7 +28,7 @@ où :
 - d = espacement antennes
 - λ = longueur d'onde
 
-🧮 3️⃣ Procédure de Validation
+ Procédure de Validation
 Étape 1 — Monte Carlo
 
 Pour chaque SNR :

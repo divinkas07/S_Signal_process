@@ -11,15 +11,17 @@ Script de validation Monte Carlo couvrant 4 scenarios critiques :
 Metriques : SIR Gain, Taux de succes, Stabilite
 """
 
-import numpy as np
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-import time
+import sys
+from pathlib import Path
 
-from signal_model import load_config, generate_time_vector, generate_array_signal
-from channel_model import apply_channel, generate_awgn, signal_power
-from estimator_ica import estimate_ica
-from metrics import compute_sir
+# Adjust sys.path to allow absolute imports from the root if run directly
+if __name__ == "__main__" and __package__ is None:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from simulator_engine.signal_model import load_config, generate_time_vector, generate_array_signal
+from simulator_engine.channel_model import apply_channel, generate_awgn, signal_power
+from core_algorithms.estimator_ica import estimate_ica
+from core_algorithms.metrics import compute_sir
 
 def generate_scenario_signals(scenario_id, N, fs):
     """

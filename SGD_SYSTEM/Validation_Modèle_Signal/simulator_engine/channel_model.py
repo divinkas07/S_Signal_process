@@ -149,8 +149,15 @@ def apply_channel(signal: np.ndarray, config: dict) -> tuple[np.ndarray, np.ndar
 # ──────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import os
+    import sys
+    from pathlib import Path
+    # Adjust sys.path to allow absolute imports from the root if run directly
+    if __package__ is None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
     import matplotlib.pyplot as plt
-    from signal_model import load_config, generate_signal_from_config
+    from simulator_engine.signal_model import load_config, generate_signal_from_config
 
     cfg = load_config()
     t, s, X = generate_signal_from_config(cfg)

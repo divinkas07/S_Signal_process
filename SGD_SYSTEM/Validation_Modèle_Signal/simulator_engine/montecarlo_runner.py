@@ -22,11 +22,15 @@ import time
 import argparse
 from pathlib import Path
 
-from signal_model import load_config, generate_signal_from_config, generate_time_vector, generate_multitone
-from channel_model import apply_channel
-from estimator_music import estimate_aoa_music
-from crlb import crlb_frequency, crlb_aoa
-from metrics import rmse
+# Adjust sys.path to allow absolute imports from the root if run directly
+if __name__ == "__main__" and __package__ is None:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from simulator_engine.signal_model import load_config, generate_signal_from_config, generate_time_vector, generate_multitone
+from simulator_engine.channel_model import apply_channel
+from core_algorithms.estimator_music import estimate_aoa_music
+from core_algorithms.crlb import crlb_frequency, crlb_aoa
+from core_algorithms.metrics import rmse
 
 
 # ══════════════════════════════════════════════
@@ -109,7 +113,7 @@ def run_montecarlo(config: dict, n_runs_override: int = None, verbose: bool = Tr
             aoa_estimates.append(aoa_est[0])
 
             # ── Estimation Frequency (First Tone) ──
-            from metrics import detect_spectral_peaks
+            from core_algorithms.metrics import detect_spectral_peaks
             peaks = detect_spectral_peaks(X_noisy[0], sig["fs"], n_peaks=len(sig["frequencies"]))
             freq_raw = peaks[0] if len(peaks) > 0 else np.nan
             freq_ests.append(freq_raw)

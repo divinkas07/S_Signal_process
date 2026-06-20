@@ -24,7 +24,7 @@ from pathlib import Path
 def load_config(config_path: str = None) -> dict:
     """Charge le fichier config.yaml et retourne un dict."""
     if config_path is None:
-        config_path = Path(__file__).parent / "config.yaml"
+        config_path = Path(__file__).resolve().parent.parent / "config.yaml"
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 

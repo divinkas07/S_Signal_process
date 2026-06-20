@@ -127,8 +127,15 @@ def estimate_aoa_music(
 
 
 if __name__ == "__main__":
-    from signal_model import load_config, generate_signal_from_config
-    from channel_model import apply_channel
+    import os
+    import sys
+    from pathlib import Path
+    # Adjust sys.path to allow absolute imports from the root if run directly
+    if __package__ is None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+    from simulator_engine.signal_model import load_config, generate_signal_from_config
+    from simulator_engine.channel_model import apply_channel
 
     cfg = load_config()
     t, s, X = generate_signal_from_config(cfg)

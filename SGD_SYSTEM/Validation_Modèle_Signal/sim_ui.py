@@ -39,19 +39,23 @@ from rich.layout import Layout
 from rich import box
 
 # ──────────────────────────────────────────────
-# Modules SGD
+# Modules SGD (Simulation Engine)
 # ──────────────────────────────────────────────
-from signal_model import load_config, generate_signal_from_config, generate_time_vector, generate_multitone
-from channel_model import apply_channel, signal_power
-from estimator_music import estimate_aoa_music, music_spectrum
-from estimator_ica import estimate_ica
-from estimator_imm import create_doppler_imm
-from crlb import crlb_aoa, crlb_frequency, compute_crlb_from_config
-from metrics import rmse, mae, detect_spectral_peaks, compute_doppler_error, compute_sir
+from simulator_engine.signal_model import load_config, generate_signal_from_config, generate_time_vector, generate_multitone
+from simulator_engine.channel_model import apply_channel, signal_power
+
+# ──────────────────────────────────────────────
+# Modules SGD (Core Algorithms)
+# ──────────────────────────────────────────────
+from core_algorithms.estimator_music import estimate_aoa_music, music_spectrum
+from core_algorithms.estimator_ica import estimate_ica
+from core_algorithms.estimator_imm import create_doppler_imm
+from core_algorithms.crlb import crlb_aoa, crlb_frequency, compute_crlb_from_config
+from core_algorithms.metrics import rmse, mae, detect_spectral_peaks, compute_doppler_error, compute_sir
 
 # ── Dynamic IMM Industrial ──
-from IMM_industrial.leo_doppler_sim import generate_leo_trajectory, add_maneuver
-from IMM_industrial.imm_tracker import IndustrialIMMTracker
+from core_algorithms.IMM_industrial.leo_doppler_sim import generate_leo_trajectory, add_maneuver
+from core_algorithms.IMM_industrial.imm_tracker import IndustrialIMMTracker
 
 console = Console()
 

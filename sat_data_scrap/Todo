@@ -1,0 +1,11 @@
+1. Sélection satellite LEO
+2. Téléchargement TLE historiques
+3. Parsing & structuration
+4. Propagation SGP4
+5. Conversion référentiel (TEME → ECI/ECEF)
+6. Construction Ground Truth pseudo-réelle
+7. Simulation mesures bruitées
+8. Génération points collocation PINN
+9. Normalisation
+10. Split temporel
+11. Export dataset final
